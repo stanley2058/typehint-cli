@@ -169484,8 +169484,8 @@ function collectNonCodeRanges(fileText, filePath) {
       break;
     if (!isNonCodeTokenKind(kind))
       continue;
-    const start = scanner.getTokenPos();
-    const end = scanner.getTextPos();
+    const start = scanner.getTokenStart();
+    const end = scanner.getTokenEnd();
     if (end > start)
       ranges.push({ start, end });
   }

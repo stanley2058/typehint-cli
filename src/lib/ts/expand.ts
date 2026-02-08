@@ -7,7 +7,11 @@ export type ExpandOptions = {
   maxChars: number;
 };
 
-function typeToString(checker: ts.TypeChecker, type: ts.Type, node?: ts.Node): string {
+function typeToString(
+  checker: ts.TypeChecker,
+  type: ts.Type,
+  node?: ts.Node,
+): string {
   return checker.typeToString(
     type,
     node,
@@ -16,7 +20,11 @@ function typeToString(checker: ts.TypeChecker, type: ts.Type, node?: ts.Node): s
   );
 }
 
-function signatureToString(checker: ts.TypeChecker, sig: ts.Signature, node?: ts.Node): string {
+function signatureToString(
+  checker: ts.TypeChecker,
+  sig: ts.Signature,
+  node?: ts.Node,
+): string {
   return checker.signatureToString(
     sig,
     node,
@@ -47,7 +55,9 @@ export function expandTypeBounded(
     if (depth <= 0) return compactType(t);
 
     if (t.isUnion()) {
-      const members = t.types.slice(0, opts.maxUnion).map((m) => expandUnionMember(m, depth - 1));
+      const members = t.types
+        .slice(0, opts.maxUnion)
+        .map((m) => expandUnionMember(m, depth - 1));
       const suffix = t.types.length > opts.maxUnion ? " | ..." : "";
       return members.join(" | ") + suffix;
     }
@@ -75,7 +85,8 @@ export function expandTypeBounded(
     const constructSigs = apparent.getConstructSignatures();
 
     const props = checker.getPropertiesOfType(apparent);
-    const hasMembers = props.length > 0 || callSigs.length > 0 || constructSigs.length > 0;
+    const hasMembers =
+      props.length > 0 || callSigs.length > 0 || constructSigs.length > 0;
     if (!hasMembers) return typeToString(checker, t, node);
 
     const chunks: string[] = [];
@@ -100,7 +111,9 @@ export function expandTypeBounded(
     for (const p of shown) {
       const isOptional = (p.getFlags() & ts.SymbolFlags.Optional) !== 0;
       const pType = checker.getTypeOfSymbolAtLocation(p, node);
-      const pText = isOptional ? expandOptional(pType, depth - 1) : expandInner(pType, depth - 1);
+      const pText = isOptional
+        ? expandOptional(pType, depth - 1)
+        : expandInner(pType, depth - 1);
       chunks.push(` ${p.getName()}${isOptional ? "?" : ""}: ${pText};`);
     }
 
@@ -108,11 +121,17 @@ export function expandTypeBounded(
       chunks.push(" ...;");
     }
 
-    const stringIndex = checker.getIndexTypeOfType(apparent, ts.IndexKind.String);
+    const stringIndex = checker.getIndexTypeOfType(
+      apparent,
+      ts.IndexKind.String,
+    );
     if (stringIndex) {
       chunks.push(` [key: string]: ${expandInner(stringIndex, depth - 1)};`);
     }
-    const numberIndex = checker.getIndexTypeOfType(apparent, ts.IndexKind.Number);
+    const numberIndex = checker.getIndexTypeOfType(
+      apparent,
+      ts.IndexKind.Number,
+    );
     if (numberIndex) {
       chunks.push(` [index: number]: ${expandInner(numberIndex, depth - 1)};`);
     }
@@ -123,7 +142,7 @@ export function expandTypeBounded(
 
   function unionMemberName(t: ts.Type): string | undefined {
     // Prefer alias name when present.
-    const alias = (t as any).aliasSymbol as ts.Symbol | undefined;
+    const alias = t.aliasSymbol;
     const sym = alias ?? t.getSymbol();
     if (!sym) return undefined;
     const name = sym.getName();
@@ -151,12 +170,16 @@ export function expandTypeBounded(
     }
 
     if (t.isUnion()) {
-      const members = t.types.slice(0, opts.maxUnion).map((m) => unionMemberName(m) ?? typeToString(checker, m, node));
+      const members = t.types
+        .slice(0, opts.maxUnion)
+        .map((m) => unionMemberName(m) ?? typeToString(checker, m, node));
       const suffix = t.types.length > opts.maxUnion ? " | ..." : "";
       return members.join(" | ") + suffix;
     }
     if (t.isIntersection()) {
-      return t.types.map((m) => unionMemberName(m) ?? typeToString(checker, m, node)).join(" & ");
+      return t.types
+        .map((m) => unionMemberName(m) ?? typeToString(checker, m, node))
+        .join(" & ");
     }
 
     const named = unionMemberName(t);
@@ -187,11 +210,15 @@ export function expandTypeBounded(
 
   function expandOptional(pType: ts.Type, depth: number): string {
     if (!pType.isUnion()) return expandInner(pType, depth);
-    const members = pType.types.filter((t) => (t.flags & ts.TypeFlags.Undefined) === 0);
+    const members = pType.types.filter(
+      (t) => (t.flags & ts.TypeFlags.Undefined) === 0,
+    );
     if (members.length === pType.types.length) return expandInner(pType, depth);
     if (members.length === 0) return "undefined";
     if (members.length === 1) return expandInner(members[0]!, depth);
-    const shown = members.slice(0, opts.maxUnion).map((m) => expandUnionMember(m, depth - 1));
+    const shown = members
+      .slice(0, opts.maxUnion)
+      .map((m) => expandUnionMember(m, depth - 1));
     const suffix = members.length > opts.maxUnion ? " | ..." : "";
     return shown.join(" | ") + suffix;
   }

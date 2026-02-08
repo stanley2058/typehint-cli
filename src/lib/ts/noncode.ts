@@ -27,7 +27,10 @@ function isNonCodeTokenKind(kind: ts.SyntaxKind): boolean {
   }
 }
 
-export function collectNonCodeRanges(fileText: string, filePath: string): NonCodeRange[] {
+export function collectNonCodeRanges(
+  fileText: string,
+  filePath: string,
+): NonCodeRange[] {
   const ranges: NonCodeRange[] = [];
 
   const scanner = ts.createScanner(
@@ -42,8 +45,8 @@ export function collectNonCodeRanges(fileText: string, filePath: string): NonCod
     if (kind === ts.SyntaxKind.EndOfFileToken) break;
 
     if (!isNonCodeTokenKind(kind)) continue;
-    const start = scanner.getTokenPos();
-    const end = scanner.getTextPos();
+    const start = scanner.getTokenStart();
+    const end = scanner.getTokenEnd();
     if (end > start) ranges.push({ start, end });
   }
 
