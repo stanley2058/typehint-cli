@@ -1,6 +1,6 @@
 {
   "name": "@stanley2058/typehint-cli",
-  "module": "index.ts",
+  "module": "src/cli.ts",
   "type": "module",
   "license": "MIT",
   "version": "0.0.1",
