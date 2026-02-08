@@ -9,12 +9,12 @@ import {
   parseArgs,
 } from "../args.ts";
 import { formatGrepHuman, formatGrepJson } from "../output.ts";
-import { createTsContext } from "../ts/project.ts";
+import { engineBatchAt, resolveEngine } from "../engine/engine.ts";
 import { rgSearch } from "../search/rg.ts";
 import { byteOffsetToUtf16Pos } from "../util/utf8.ts";
-import { getNodeForHover } from "../ts/position.ts";
-import { expandTypeBounded } from "../ts/expand.ts";
 import { collectNonCodeRanges, isPosInNonCode } from "../ts/noncode.ts";
+import { readFileSync } from "node:fs";
+import { utf16PosToLineChar1Based } from "../util/linepos.ts";
 
 export type TypehintGrepParams = {
   argv: string[];
@@ -63,124 +63,124 @@ export async function typehintGrep(params: TypehintGrepParams): Promise<number> 
     return 2;
   }
 
-  const files = Array.from(new Set(matches.map((m) => m.filePath)));
-  const ctx = await createTsContext({
-    cwd: params.cwd,
-    project: projectFlag,
-    extraFileNames: files,
-  });
-  const program = ctx.languageService.getProgram();
-  if (!program) throw new Error("TypeScript program is unavailable");
-  const checker = program.getTypeChecker();
-
   const candidates: any[] = [];
+  const items: Array<{ filePath: string; pos: number; preview?: string; line?: number }> = [];
 
-  const matchesByFile = new Map<string, typeof matches>();
+  const fileTextCache = new Map<string, string>();
+  const nonCodeCache = new Map<string, ReturnType<typeof collectNonCodeRanges>>();
+  const getFileText = (filePath: string) => {
+    const cached = fileTextCache.get(filePath);
+    if (cached != null) return cached;
+    const text = readFileSync(filePath, "utf8");
+    fileTextCache.set(filePath, text);
+    return text;
+  };
+
+  const getNonCodeRanges = (filePath: string) => {
+    const cached = nonCodeCache.get(filePath);
+    if (cached) return cached;
+    const ranges = collectNonCodeRanges(getFileText(filePath), filePath);
+    nonCodeCache.set(filePath, ranges);
+    return ranges;
+  };
+
   for (const m of matches) {
-    const list = matchesByFile.get(m.filePath);
-    if (list) list.push(m);
-    else matchesByFile.set(m.filePath, [m]);
-  }
+    const filePath = m.filePath;
+    const fileText = getFileText(filePath);
+    const nonCodeRanges = getNonCodeRanges(filePath);
 
-  for (const [filePath, fileMatches] of matchesByFile) {
-    const sourceFile = program.getSourceFile(filePath);
-    if (!sourceFile) continue;
+    const sub = m.submatches[submatch];
+    if (!sub) {
+      candidates.push({
+        filePath,
+        line: m.line,
+        preview: m.preview,
+        error: `No submatch ${submatch} (available: ${m.submatches.length})`,
+      });
+      continue;
+    }
 
-    const fileText = ctx.readFileText(filePath);
-    const nonCodeRanges = collectNonCodeRanges(fileText, filePath);
-
-    for (const m of fileMatches) {
-
-      const sub = m.submatches[submatch];
-      if (!sub) {
+    let targetByteOffsetInSub = 0;
+    if (target) {
+      const buf = Buffer.from(sub.text, "utf8");
+      const needle = Buffer.from(target, "utf8");
+      const first = buf.indexOf(needle);
+      const second = first === -1 ? -1 : buf.indexOf(needle, first + 1);
+      if (first === -1) {
         candidates.push({
           filePath,
           line: m.line,
           preview: m.preview,
-          error: `No submatch ${submatch} (available: ${m.submatches.length})`,
+          error: `Target not found in match: ${target}`,
         });
         continue;
       }
-
-      let targetByteOffsetInSub = 0;
-      if (target) {
-        const buf = Buffer.from(sub.text, "utf8");
-        const needle = Buffer.from(target, "utf8");
-        const first = buf.indexOf(needle);
-        const second = first === -1 ? -1 : buf.indexOf(needle, first + 1);
-        if (first === -1) {
-          candidates.push({
-            filePath,
-            line: m.line,
-            preview: m.preview,
-            error: `Target not found in match: ${target}`,
-          });
-          continue;
-        }
-        if (second !== -1) {
-          candidates.push({
-            filePath,
-            line: m.line,
-            preview: m.preview,
-            error: `Target occurs multiple times in match; refine --regex or --target`,
-          });
-          continue;
-        }
-        targetByteOffsetInSub = first;
-      }
-
-      const absByteOffset = m.matchByteOffset + sub.startByte + targetByteOffsetInSub;
-      const pos = byteOffsetToUtf16Pos(fileText, absByteOffset);
-
-      if (isPosInNonCode(pos, nonCodeRanges)) {
-        // Ignore matches inside comments/strings/regex/JSX text.
-        continue;
-      }
-
-      const lc = sourceFile.getLineAndCharacterOfPosition(pos);
-      const line1 = lc.line + 1;
-      const char1 = lc.character + 1;
-
-      const qi = ctx.languageService.getQuickInfoAtPosition(filePath, pos);
-      if (!qi) {
+      if (second !== -1) {
         candidates.push({
           filePath,
-          line: line1,
-          character: char1,
-          pos,
+          line: m.line,
           preview: m.preview,
-          error: "No QuickInfo at candidate position",
+          error: `Target occurs multiple times in match; refine --regex or --target`,
         });
         continue;
       }
-
-      const hoverNode = getNodeForHover(sourceFile, pos);
-      const symbol = checker.getSymbolAtLocation(hoverNode) ?? undefined;
-      const type = symbol
-        ? checker.getTypeOfSymbolAtLocation(symbol, hoverNode)
-        : checker.getTypeAtLocation(hoverNode);
-
-      const expandedType = expand
-        ? expandTypeBounded(checker, type, hoverNode, {
-            depth,
-            maxProps,
-            maxUnion,
-            maxChars,
-          })
-        : undefined;
-
-      candidates.push(
-        ctx.formatResult({
-          filePath,
-          sourceFile,
-          pos,
-          quickInfo: qi,
-          expandedType,
-          preview: m.preview,
-          line: line1,
-        }),
-      );
+      targetByteOffsetInSub = first;
     }
+
+    const absByteOffset = m.matchByteOffset + sub.startByte + targetByteOffsetInSub;
+    const pos = byteOffsetToUtf16Pos(fileText, absByteOffset);
+
+    if (isPosInNonCode(pos, nonCodeRanges)) {
+      // Ignore matches inside comments/strings/regex/JSX text.
+      continue;
+    }
+
+    // Keep original line from rg when possible.
+    items.push({ filePath, pos, preview: m.preview, line: m.line });
+  }
+
+  const { engine, lspEndpoint } = resolveEngine(parsed.flags);
+  const batch = await engineBatchAt({
+    engine,
+    lspEndpoint,
+    cwd: params.cwd,
+    projectFlag,
+    items,
+    expand,
+    depth,
+    maxProps,
+    maxUnion,
+    maxChars,
+  });
+
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i]!;
+    const r = batch.results[i]!;
+    if (r.status === "ok") {
+      candidates.push(r.result);
+      continue;
+    }
+    const fileText = getFileText(it.filePath);
+    const lc = utf16PosToLineChar1Based(fileText, it.pos);
+    if (r.status === "noQuickInfo") {
+      candidates.push({
+        filePath: it.filePath,
+        line: it.line ?? lc.line,
+        character: lc.character,
+        pos: it.pos,
+        preview: it.preview,
+        error: "No QuickInfo at candidate position",
+      });
+      continue;
+    }
+    candidates.push({
+      filePath: it.filePath,
+      line: it.line ?? lc.line,
+      character: lc.character,
+      pos: it.pos,
+      preview: it.preview,
+      error: r.message,
+    });
   }
 
   const out = {

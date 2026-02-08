@@ -1,4 +1,3 @@
-import path from "node:path";
 import process from "node:process";
 
 import {
@@ -8,9 +7,8 @@ import {
   parseArgs,
 } from "../args.ts";
 import { formatHuman, formatJson } from "../output.ts";
-import { createTsContext } from "../ts/project.ts";
-import { getNodeForHover, posFromLineChar } from "../ts/position.ts";
-import { expandTypeBounded } from "../ts/expand.ts";
+import { resolveEngine, engineAt, normalizeAbs, readFileTextFast } from "../engine/engine.ts";
+import { lineChar1BasedToUtf16Pos } from "../util/linepos.ts";
 
 export type TypehintAtParams = {
   argv: string[];
@@ -31,7 +29,7 @@ export async function typehintAt(params: TypehintAtParams): Promise<number> {
     return 1;
   }
 
-  const filePath = path.isAbsolute(fileFlag) ? fileFlag : path.resolve(params.cwd, fileFlag);
+  const filePath = normalizeAbs(params.cwd, fileFlag);
 
   const posFlag = getFlagString(parsed.flags, "pos");
   const lineFlag = getFlagString(parsed.flags, "line");
@@ -72,60 +70,37 @@ export async function typehintAt(params: TypehintAtParams): Promise<number> {
   const maxUnion = getFlagNumber(parsed.flags, "maxUnion", { defaultValue: 10, min: 0 });
   const maxChars = getFlagNumber(parsed.flags, "maxChars", { defaultValue: 4000, min: 200 });
 
-  const ctx = await createTsContext({
-    cwd: params.cwd,
-    project: projectFlag,
-    extraFileNames: [filePath],
-  });
-
-  const program = ctx.languageService.getProgram();
-  if (!program) throw new Error("TypeScript program is unavailable");
-
-  const sourceFile = program.getSourceFile(filePath);
-  if (!sourceFile) {
-    throw new Error(`File is not in program: ${filePath}`);
-  }
-
   const posNumber =
     pos0Based != null
       ? pos0Based
-      : posFromLineChar(sourceFile, lineChar1Based!.line, lineChar1Based!.character);
+      : lineChar1BasedToUtf16Pos(readFileTextFast(filePath), lineChar1Based!.line, lineChar1Based!.character);
 
-  const qi = ctx.languageService.getQuickInfoAtPosition(filePath, posNumber);
-  if (!qi) {
+  const { engine, lspEndpoint } = resolveEngine(parsed.flags);
+
+  const out = await engineAt({
+    engine,
+    lspEndpoint,
+    cwd: params.cwd,
+    projectFlag,
+    filePath,
+    pos: posNumber,
+    expand,
+    depth,
+    maxProps,
+    maxUnion,
+    maxChars,
+  });
+
+  if (out.status === "noQuickInfo") {
     process.stderr.write("No QuickInfo at the given position\n");
     return 2;
   }
-
-  const checker = program.getTypeChecker();
-  const hoverNode = getNodeForHover(sourceFile, posNumber);
-  const symbol = checker.getSymbolAtLocation(hoverNode) ?? undefined;
-  const type = symbol
-    ? checker.getTypeOfSymbolAtLocation(symbol, hoverNode)
-    : checker.getTypeAtLocation(hoverNode);
-
-  const expandedType = expand
-    ? expandTypeBounded(checker, type, hoverNode, {
-        depth,
-        maxProps,
-        maxUnion,
-        maxChars,
-      })
-    : undefined;
-
-  const result = ctx.formatResult({
-    filePath,
-    sourceFile,
-    pos: posNumber,
-    quickInfo: qi,
-    expandedType,
-  });
-
-  if (json) {
-    process.stdout.write(formatJson(result));
-  } else {
-    process.stdout.write(formatHuman(result));
+  if (out.status === "error") {
+    process.stderr.write(`${out.message}\n`);
+    return 1;
   }
 
+  if (json) process.stdout.write(formatJson(out.result));
+  else process.stdout.write(formatHuman(out.result));
   return 0;
 }

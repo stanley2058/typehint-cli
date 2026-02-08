@@ -3,6 +3,7 @@ import process from "node:process";
 
 import { typehintAt } from "./lib/commands/at.ts";
 import { typehintGrep } from "./lib/commands/grep.ts";
+import { typehintServer } from "./lib/commands/server.ts";
 import { printHelp } from "./lib/help.ts";
 
 declare global {
@@ -40,6 +41,14 @@ async function main(argv: string[]) {
 
   if (cmd === "grep") {
     const res = await typehintGrep({
+      argv: rest,
+      cwd: process.cwd(),
+    });
+    return res;
+  }
+
+  if (cmd === "server") {
+    const res = await typehintServer({
       argv: rest,
       cwd: process.cwd(),
     });

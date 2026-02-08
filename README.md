@@ -32,6 +32,20 @@ bun run typehint at --file fixtures/sample.ts --line 19 --char 5
 bun run typehint grep --regex 'foo\\.bar' --target bar --glob '**/*.ts'
 ```
 
+## Performance (workspace daemon)
+
+By default, `typehint` will try to reuse a persistent workspace service so each query doesn't rebuild a fresh TypeScript program.
+
+Controls:
+
+```bash
+# Force local one-shot mode (slow but simple)
+TYPEHINT_ENGINE=local bun run typehint at --file fixtures/sample.ts --line 19 --char 5
+
+# Force daemon mode
+TYPEHINT_ENGINE=daemon bun run typehint at --file fixtures/sample.ts --line 19 --char 5
+```
+
 ## Build
 
 ```bash

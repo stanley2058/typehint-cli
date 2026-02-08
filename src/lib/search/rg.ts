@@ -109,6 +109,13 @@ export async function rgSearch(params: {
   });
 
   const code = await done;
+  // ripgrep exit codes:
+  // - 0: matches found
+  // - 1: no matches
+  // - 2+: actual errors
+  if (code === 1 && matches.length === 0) {
+    return [];
+  }
   if (code !== 0 && matches.length === 0) {
     const msg = stderr.trim() || `ripgrep failed with exit code ${code}`;
     throw new Error(msg);
