@@ -168740,12 +168740,11 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 });
 
 // src/cli.ts
-import path8 from "node:path";
-import process5 from "node:process";
+import path11 from "node:path";
+import process9 from "node:process";
 
 // src/lib/commands/at.ts
-import path3 from "node:path";
-import process2 from "node:process";
+import process4 from "node:process";
 
 // src/lib/args.ts
 function isFlagToken(s) {
@@ -168914,6 +168913,11 @@ function quickInfoToDisplay(qi) {
   return import_typescript.default.displayPartsToString(qi.displayParts ?? []);
 }
 
+// src/lib/engine/engine.ts
+import fs4 from "node:fs";
+import path5 from "node:path";
+import process3 from "node:process";
+
 // src/lib/ts/project.ts
 var import_typescript3 = __toESM(require_typescript(), 1);
 import fs2 from "node:fs";
@@ -168970,9 +168974,6 @@ function findUpTsconfig(params) {
 
 // src/lib/ts/position.ts
 var import_typescript2 = __toESM(require_typescript(), 1);
-function posFromLineChar(sourceFile, line1, character1) {
-  return sourceFile.getPositionOfLineAndCharacter(line1 - 1, character1 - 1);
-}
 function posToLineChar1Based(sourceFile, pos) {
   const lc = sourceFile.getLineAndCharacterOfPosition(pos);
   return { line: lc.line + 1, character: lc.character + 1 };
@@ -169252,21 +169253,465 @@ function expandTypeBounded(checker, type, node, opts) {
   }
 }
 
+// src/lib/typehint/compute.ts
+function computeTypehintAt(ctx, params) {
+  try {
+    const program = ctx.languageService.getProgram();
+    if (!program)
+      return { status: "error", message: "TypeScript program is unavailable" };
+    const sourceFile = program.getSourceFile(params.filePath);
+    if (!sourceFile) {
+      return { status: "error", message: `File is not in program: ${params.filePath}` };
+    }
+    const qi = ctx.languageService.getQuickInfoAtPosition(params.filePath, params.pos);
+    if (!qi)
+      return { status: "noQuickInfo" };
+    const checker = program.getTypeChecker();
+    const hoverNode = getNodeForHover(sourceFile, params.pos);
+    const symbol = checker.getSymbolAtLocation(hoverNode) ?? undefined;
+    const type = symbol ? checker.getTypeOfSymbolAtLocation(symbol, hoverNode) : checker.getTypeAtLocation(hoverNode);
+    const expandedType = params.expand ? expandTypeBounded(checker, type, hoverNode, {
+      depth: params.depth,
+      maxProps: params.maxProps,
+      maxUnion: params.maxUnion,
+      maxChars: params.maxChars
+    }) : undefined;
+    const result = ctx.formatResult({
+      filePath: params.filePath,
+      sourceFile,
+      pos: params.pos,
+      quickInfo: qi,
+      expandedType,
+      preview: params.preview,
+      line: params.line
+    });
+    return { status: "ok", result };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { status: "error", message: msg };
+  }
+}
+
+// src/lib/daemon/client.ts
+import fs3 from "node:fs";
+import net from "node:net";
+import path4 from "node:path";
+import process2 from "node:process";
+import childProcess from "node:child_process";
+
+// src/lib/daemon/rpc.ts
+function writeJsonLine(sock, obj) {
+  sock.write(JSON.stringify(obj) + `
+`);
+}
+function createJsonLineParser(onLine) {
+  let buf = "";
+  return (chunk) => {
+    buf += chunk;
+    while (true) {
+      const idx = buf.indexOf(`
+`);
+      if (idx === -1)
+        break;
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      const trimmed = line.trim();
+      if (!trimmed)
+        continue;
+      try {
+        onLine(JSON.parse(trimmed));
+      } catch {}
+    }
+  };
+}
+
+// src/lib/daemon/paths.ts
+import crypto from "node:crypto";
+import os from "node:os";
+import path3 from "node:path";
+function socketPathForProject(projectPath) {
+  const h = crypto.createHash("sha1").update(projectPath).digest("hex").slice(0, 16);
+  return path3.join(os.tmpdir(), `typehint-${h}.sock`);
+}
+
+// src/lib/daemon/client.ts
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+function resolveProjectPathForRequest(opts) {
+  return findUpTsconfig({
+    cwd: opts.cwd,
+    project: opts.projectFlag,
+    extraFile: opts.extraFile
+  });
+}
+function parseEndpoint(endpoint) {
+  if (endpoint.startsWith("unix:"))
+    return { kind: "unix", socketPath: endpoint.slice("unix:".length) };
+  if (endpoint.startsWith("tcp:")) {
+    const rest = endpoint.slice("tcp:".length);
+    const [host, portStr] = rest.split(":");
+    const port = Number(portStr);
+    if (!host || !Number.isFinite(port))
+      throw new Error(`Invalid tcp endpoint: ${endpoint}`);
+    return { kind: "tcp", host, port };
+  }
+  return { kind: "unix", socketPath: endpoint };
+}
+async function connectOnce(params) {
+  const ep = parseEndpoint(params.endpoint);
+  return await new Promise((resolve, reject) => {
+    const sock = net.createConnection(ep.kind === "unix" ? { path: ep.socketPath } : { host: ep.host, port: ep.port }, () => resolve(sock));
+    sock.on("error", reject);
+  });
+}
+function removeStaleUnixSocket(endpoint) {
+  const ep = parseEndpoint(endpoint);
+  if (ep.kind !== "unix")
+    return;
+  try {
+    if (fs3.existsSync(ep.socketPath))
+      fs3.unlinkSync(ep.socketPath);
+  } catch {}
+}
+function spawnServer(params) {
+  const ep = parseEndpoint(params.endpoint);
+  if (ep.kind !== "unix") {
+    throw new Error("Auto-spawn only supports unix sockets currently");
+  }
+  const argv0 = process2.argv[0] ?? "bun";
+  const argv1 = process2.argv[1] ?? path4.resolve("src/cli.ts");
+  const child = childProcess.spawn(argv0, [
+    argv1,
+    "server",
+    "--project",
+    params.projectPath,
+    "--socket",
+    ep.socketPath
+  ], {
+    cwd: params.cwd,
+    detached: true,
+    stdio: "ignore",
+    env: process2.env
+  });
+  child.unref?.();
+}
+var nextId = 1;
+async function requestDaemonJson(params) {
+  const projectPath = resolveProjectPathForRequest({
+    cwd: params.cwd,
+    projectFlag: params.projectFlag,
+    extraFile: params.extraFile
+  });
+  const preferredEndpoint = params.lspEndpoint || process2.env.TYPEHINT_LSP_ENDPOINT || "";
+  const daemonEndpoint = `unix:${socketPathForProject(projectPath)}`;
+  const endpoints = preferredEndpoint ? [preferredEndpoint, daemonEndpoint] : [daemonEndpoint];
+  let lastErr;
+  for (let i = 0;i < endpoints.length; i++) {
+    const endpoint = endpoints[i];
+    try {
+      const sock = await connectOnce({ endpoint });
+      try {
+        const out = await rpcRoundTrip(sock, {
+          id: String(nextId++),
+          method: params.method,
+          params: {
+            projectPath,
+            ...params.requestParams
+          }
+        });
+        sock.end();
+        return out;
+      } finally {
+        try {
+          sock.destroy();
+        } catch {}
+      }
+    } catch (err) {
+      lastErr = err;
+      if (endpoint === daemonEndpoint) {
+        removeStaleUnixSocket(endpoint);
+        try {
+          spawnServer({ projectPath, endpoint, cwd: params.cwd });
+        } catch (spawnErr) {
+          lastErr = spawnErr;
+          continue;
+        }
+        for (let attempt = 0;attempt < 20; attempt++) {
+          try {
+            const sock = await connectOnce({ endpoint });
+            const out = await rpcRoundTrip(sock, {
+              id: String(nextId++),
+              method: params.method,
+              params: { projectPath, ...params.requestParams }
+            });
+            sock.end();
+            return out;
+          } catch (e2) {
+            lastErr = e2;
+            await sleep(25);
+          }
+        }
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+async function rpcRoundTrip(sock, req) {
+  return await new Promise((resolve, reject) => {
+    const onData = createJsonLineParser((obj) => {
+      const res = obj;
+      if (!res || typeof res !== "object" || res.id !== req.id)
+        return;
+      cleanup();
+      if (res.error) {
+        const e = new Error(res.error.message, { cause: res.error });
+        reject(e);
+        return;
+      }
+      resolve(res.result);
+    });
+    const onErr = (e) => {
+      cleanup();
+      reject(e);
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new Error("connection closed"));
+    };
+    function cleanup() {
+      sock.off("error", onErr);
+      sock.off("close", onClose);
+      sock.off("end", onClose);
+      sock.off("data", onData);
+    }
+    sock.setEncoding("utf8");
+    sock.on("data", onData);
+    sock.on("error", onErr);
+    sock.on("close", onClose);
+    sock.on("end", onClose);
+    writeJsonLine(sock, req);
+  });
+}
+
+// src/lib/engine/engine.ts
+function resolveEngine(flags) {
+  const envEngine = (process3.env.TYPEHINT_ENGINE ?? "").trim();
+  const flagEngine = typeof flags.engine === "string" ? String(flags.engine) : undefined;
+  const raw = (flagEngine ?? envEngine ?? "auto").toLowerCase();
+  const engine = raw === "daemon" || raw === "local" || raw === "lsp" ? raw : "auto";
+  const lspEndpoint = (typeof flags.lsp === "string" ? String(flags.lsp) : undefined) ?? (process3.env.TYPEHINT_LSP_ENDPOINT ? String(process3.env.TYPEHINT_LSP_ENDPOINT) : undefined);
+  return { engine, lspEndpoint };
+}
+async function engineAt(params) {
+  if (params.engine === "local") {
+    const ctx2 = await createTsContext({
+      cwd: params.cwd,
+      project: params.projectFlag,
+      extraFileNames: [params.filePath]
+    });
+    return computeTypehintAt(ctx2, {
+      filePath: params.filePath,
+      pos: params.pos,
+      preview: params.preview,
+      line: params.line,
+      expand: params.expand,
+      depth: params.depth,
+      maxProps: params.maxProps,
+      maxUnion: params.maxUnion,
+      maxChars: params.maxChars
+    });
+  }
+  const wantsLspFirst = params.engine === "lsp" || params.engine === "auto";
+  const wantsDaemon = params.engine === "daemon" || params.engine === "auto";
+  if (wantsLspFirst && params.lspEndpoint) {
+    try {
+      const res = await requestDaemonJson({
+        cwd: params.cwd,
+        projectFlag: params.projectFlag,
+        extraFile: params.filePath,
+        method: "typehint/at",
+        requestParams: {
+          filePath: params.filePath,
+          pos: params.pos,
+          preview: params.preview,
+          line: params.line,
+          expand: params.expand,
+          depth: params.depth,
+          maxProps: params.maxProps,
+          maxUnion: params.maxUnion,
+          maxChars: params.maxChars
+        },
+        lspEndpoint: params.lspEndpoint
+      });
+      return res;
+    } catch {
+      if (params.engine === "lsp")
+        throw new Error("Failed to query workspace LSP endpoint");
+    }
+  }
+  if (wantsDaemon) {
+    const res = await requestDaemonJson({
+      cwd: params.cwd,
+      projectFlag: params.projectFlag,
+      extraFile: params.filePath,
+      method: "typehint/at",
+      requestParams: {
+        filePath: params.filePath,
+        pos: params.pos,
+        preview: params.preview,
+        line: params.line,
+        expand: params.expand,
+        depth: params.depth,
+        maxProps: params.maxProps,
+        maxUnion: params.maxUnion,
+        maxChars: params.maxChars
+      }
+    });
+    return res;
+  }
+  const ctx = await createTsContext({
+    cwd: params.cwd,
+    project: params.projectFlag,
+    extraFileNames: [params.filePath]
+  });
+  return computeTypehintAt(ctx, {
+    filePath: params.filePath,
+    pos: params.pos,
+    preview: params.preview,
+    line: params.line,
+    expand: params.expand,
+    depth: params.depth,
+    maxProps: params.maxProps,
+    maxUnion: params.maxUnion,
+    maxChars: params.maxChars
+  });
+}
+async function engineBatchAt(params) {
+  if (params.engine === "local") {
+    const extra = Array.from(new Set(params.items.map((i) => i.filePath)));
+    const ctx = await createTsContext({
+      cwd: params.cwd,
+      project: params.projectFlag,
+      extraFileNames: extra
+    });
+    const results = params.items.map((it) => computeTypehintAt(ctx, {
+      filePath: it.filePath,
+      pos: it.pos,
+      preview: it.preview,
+      line: it.line,
+      expand: params.expand,
+      depth: params.depth,
+      maxProps: params.maxProps,
+      maxUnion: params.maxUnion,
+      maxChars: params.maxChars
+    }));
+    return { results };
+  }
+  const wantsLspFirst = params.engine === "lsp" || params.engine === "auto";
+  const wantsDaemon = params.engine === "daemon" || params.engine === "auto";
+  if (wantsLspFirst && params.lspEndpoint) {
+    try {
+      const res = await requestDaemonJson({
+        cwd: params.cwd,
+        projectFlag: params.projectFlag,
+        extraFile: params.items[0]?.filePath,
+        method: "typehint/batchAt",
+        requestParams: {
+          items: params.items,
+          options: {
+            expand: params.expand,
+            depth: params.depth,
+            maxProps: params.maxProps,
+            maxUnion: params.maxUnion,
+            maxChars: params.maxChars
+          }
+        },
+        lspEndpoint: params.lspEndpoint
+      });
+      return res;
+    } catch {
+      if (params.engine === "lsp")
+        throw new Error("Failed to query workspace LSP endpoint");
+    }
+  }
+  if (wantsDaemon) {
+    const res = await requestDaemonJson({
+      cwd: params.cwd,
+      projectFlag: params.projectFlag,
+      extraFile: params.items[0]?.filePath,
+      method: "typehint/batchAt",
+      requestParams: {
+        items: params.items,
+        options: {
+          expand: params.expand,
+          depth: params.depth,
+          maxProps: params.maxProps,
+          maxUnion: params.maxUnion,
+          maxChars: params.maxChars
+        }
+      }
+    });
+    return res;
+  }
+  return await engineBatchAt({
+    ...params,
+    engine: "local"
+  });
+}
+function readFileTextFast(filePath) {
+  return fs4.readFileSync(filePath, "utf8");
+}
+function normalizeAbs(cwd, fileFlag) {
+  return path5.isAbsolute(fileFlag) ? fileFlag : path5.resolve(cwd, fileFlag);
+}
+
+// src/lib/util/linepos.ts
+function lineChar1BasedToUtf16Pos(fileText, line1, char1) {
+  if (line1 < 1 || char1 < 1)
+    throw new Error("line/char must be 1-based");
+  let line = 1;
+  let i = 0;
+  while (line < line1) {
+    const nl = fileText.indexOf(`
+`, i);
+    if (nl === -1) {
+      return fileText.length;
+    }
+    i = nl + 1;
+    line++;
+  }
+  const pos = i + (char1 - 1);
+  return Math.max(0, Math.min(pos, fileText.length));
+}
+function utf16PosToLineChar1Based(fileText, pos) {
+  const clamped = Math.max(0, Math.min(pos, fileText.length));
+  let line = 1;
+  let lastLineStart = 0;
+  for (let i = 0;i < clamped; i++) {
+    if (fileText.charCodeAt(i) === 10) {
+      line++;
+      lastLineStart = i + 1;
+    }
+  }
+  return { line, character: clamped - lastLineStart + 1 };
+}
+
 // src/lib/commands/at.ts
 async function typehintAt(params) {
   const parsed = parseArgs(params.argv);
   if (parsed.flags.help === true || parsed.flags.h === true) {
-    process2.stdout.write(`Run: typehint --help
+    process4.stdout.write(`Run: typehint --help
 `);
     return 0;
   }
   const fileFlag = getFlagString(parsed.flags, "file") ?? getFlagString(parsed.flags, "f");
   if (!fileFlag) {
-    process2.stderr.write(`Missing required flag: --file
+    process4.stderr.write(`Missing required flag: --file
 `);
     return 1;
   }
-  const filePath = path3.isAbsolute(fileFlag) ? fileFlag : path3.resolve(params.cwd, fileFlag);
+  const filePath = normalizeAbs(params.cwd, fileFlag);
   const posFlag = getFlagString(parsed.flags, "pos");
   const lineFlag = getFlagString(parsed.flags, "line");
   const charFlag = getFlagString(parsed.flags, "char") ?? getFlagString(parsed.flags, "column");
@@ -169275,27 +169720,27 @@ async function typehintAt(params) {
   if (posFlag != null) {
     const n = Number(posFlag);
     if (!Number.isFinite(n) || n < 0) {
-      process2.stderr.write(`Invalid --pos; expected a non-negative integer
+      process4.stderr.write(`Invalid --pos; expected a non-negative integer
 `);
       return 1;
     }
     pos0Based = Math.trunc(n);
   } else if (lineFlag != null || charFlag != null) {
     if (lineFlag == null || charFlag == null) {
-      process2.stderr.write(`--line and --char must be provided together
+      process4.stderr.write(`--line and --char must be provided together
 `);
       return 1;
     }
     const line = Number(lineFlag);
     const ch = Number(charFlag);
     if (!Number.isFinite(line) || !Number.isFinite(ch) || line < 1 || ch < 1) {
-      process2.stderr.write(`Invalid --line/--char; expected 1-based integers
+      process4.stderr.write(`Invalid --line/--char; expected 1-based integers
 `);
       return 1;
     }
     lineChar1Based = { line: Math.trunc(line), character: Math.trunc(ch) };
   } else {
-    process2.stderr.write(`Missing position; provide --pos or --line/--char
+    process4.stderr.write(`Missing position; provide --pos or --line/--char
 `);
     return 1;
   }
@@ -169306,57 +169751,45 @@ async function typehintAt(params) {
   const maxProps = getFlagNumber(parsed.flags, "maxProps", { defaultValue: 50, min: 0 });
   const maxUnion = getFlagNumber(parsed.flags, "maxUnion", { defaultValue: 10, min: 0 });
   const maxChars = getFlagNumber(parsed.flags, "maxChars", { defaultValue: 4000, min: 200 });
-  const ctx = await createTsContext({
+  const posNumber = pos0Based != null ? pos0Based : lineChar1BasedToUtf16Pos(readFileTextFast(filePath), lineChar1Based.line, lineChar1Based.character);
+  const { engine, lspEndpoint } = resolveEngine(parsed.flags);
+  const out = await engineAt({
+    engine,
+    lspEndpoint,
     cwd: params.cwd,
-    project: projectFlag,
-    extraFileNames: [filePath]
-  });
-  const program = ctx.languageService.getProgram();
-  if (!program)
-    throw new Error("TypeScript program is unavailable");
-  const sourceFile = program.getSourceFile(filePath);
-  if (!sourceFile) {
-    throw new Error(`File is not in program: ${filePath}`);
-  }
-  const posNumber = pos0Based != null ? pos0Based : posFromLineChar(sourceFile, lineChar1Based.line, lineChar1Based.character);
-  const qi = ctx.languageService.getQuickInfoAtPosition(filePath, posNumber);
-  if (!qi) {
-    process2.stderr.write(`No QuickInfo at the given position
-`);
-    return 2;
-  }
-  const checker = program.getTypeChecker();
-  const hoverNode = getNodeForHover(sourceFile, posNumber);
-  const symbol = checker.getSymbolAtLocation(hoverNode) ?? undefined;
-  const type = symbol ? checker.getTypeOfSymbolAtLocation(symbol, hoverNode) : checker.getTypeAtLocation(hoverNode);
-  const expandedType = expand ? expandTypeBounded(checker, type, hoverNode, {
+    projectFlag,
+    filePath,
+    pos: posNumber,
+    expand,
     depth,
     maxProps,
     maxUnion,
     maxChars
-  }) : undefined;
-  const result = ctx.formatResult({
-    filePath,
-    sourceFile,
-    pos: posNumber,
-    quickInfo: qi,
-    expandedType
   });
-  if (json) {
-    process2.stdout.write(formatJson(result));
-  } else {
-    process2.stdout.write(formatHuman(result));
+  if (out.status === "noQuickInfo") {
+    process4.stderr.write(`No QuickInfo at the given position
+`);
+    return 2;
   }
+  if (out.status === "error") {
+    process4.stderr.write(`${out.message}
+`);
+    return 1;
+  }
+  if (json)
+    process4.stdout.write(formatJson(out.result));
+  else
+    process4.stdout.write(formatHuman(out.result));
   return 0;
 }
 
 // src/lib/commands/grep.ts
-import path6 from "node:path";
-import process3 from "node:process";
+import path8 from "node:path";
+import process5 from "node:process";
 
 // src/lib/search/rg.ts
 import { spawn } from "node:child_process";
-import path4 from "node:path";
+import path6 from "node:path";
 async function rgSearch(params) {
   const args = [
     "--json",
@@ -169419,7 +169852,7 @@ async function rgSearch(params) {
         endByte: Number(s.end ?? 0)
       }));
       matches.push({
-        filePath: path4.isAbsolute(filePath) ? filePath : path4.resolve(params.root, filePath),
+        filePath: path6.isAbsolute(filePath) ? filePath : path6.resolve(params.root, filePath),
         line: lineNumber,
         preview,
         matchByteOffset,
@@ -169434,6 +169867,9 @@ async function rgSearch(params) {
     }
   });
   const code = await done;
+  if (code === 1 && matches.length === 0) {
+    return [];
+  }
   if (code !== 0 && matches.length === 0) {
     const msg = stderr.trim() || `ripgrep failed with exit code ${code}`;
     throw new Error(msg);
@@ -169451,9 +169887,9 @@ function byteOffsetToUtf16Pos(fileText, byteOffset) {
 
 // src/lib/ts/noncode.ts
 var import_typescript5 = __toESM(require_typescript(), 1);
-import path5 from "node:path";
+import path7 from "node:path";
 function languageVariantFromFilePath(filePath) {
-  const ext = path5.extname(filePath).toLowerCase();
+  const ext = path7.extname(filePath).toLowerCase();
   if (ext === ".tsx" || ext === ".jsx")
     return import_typescript5.default.LanguageVariant.JSX;
   return import_typescript5.default.LanguageVariant.Standard;
@@ -169522,16 +169958,17 @@ function isPosInNonCode(pos, ranges) {
 }
 
 // src/lib/commands/grep.ts
+import { readFileSync } from "node:fs";
 async function typehintGrep(params) {
   const parsed = parseArgs(params.argv);
   const regex = getFlagString(parsed.flags, "regex") ?? getFlagString(parsed.flags, "r");
   if (!regex) {
-    process3.stderr.write(`Missing required flag: --regex
+    process5.stderr.write(`Missing required flag: --regex
 `);
     return 1;
   }
   const rootFlag = getFlagString(parsed.flags, "root");
-  const root = rootFlag ? path6.isAbsolute(rootFlag) ? rootFlag : path6.resolve(params.cwd, rootFlag) : params.cwd;
+  const root = rootFlag ? path8.isAbsolute(rootFlag) ? rootFlag : path8.resolve(params.cwd, rootFlag) : params.cwd;
   const json = parsed.flags.json === true;
   const expand = getFlagBoolean(parsed.flags, "expand", true);
   const depth = getFlagNumber(parsed.flags, "depth", { defaultValue: 2, min: 0 });
@@ -169553,141 +169990,441 @@ async function typehintGrep(params) {
   });
   if (matches.length === 0) {
     const out2 = { regex, root, candidates: [] };
-    process3.stdout.write(json ? formatGrepJson(out2) : formatGrepHuman(out2));
+    process5.stdout.write(json ? formatGrepJson(out2) : formatGrepHuman(out2));
     return 2;
   }
-  const files = Array.from(new Set(matches.map((m) => m.filePath)));
-  const ctx = await createTsContext({
-    cwd: params.cwd,
-    project: projectFlag,
-    extraFileNames: files
-  });
-  const program = ctx.languageService.getProgram();
-  if (!program)
-    throw new Error("TypeScript program is unavailable");
-  const checker = program.getTypeChecker();
   const candidates = [];
-  const matchesByFile = new Map;
+  const items = [];
+  const fileTextCache = new Map;
+  const nonCodeCache = new Map;
+  const getFileText = (filePath) => {
+    const cached = fileTextCache.get(filePath);
+    if (cached != null)
+      return cached;
+    const text = readFileSync(filePath, "utf8");
+    fileTextCache.set(filePath, text);
+    return text;
+  };
+  const getNonCodeRanges = (filePath) => {
+    const cached = nonCodeCache.get(filePath);
+    if (cached)
+      return cached;
+    const ranges = collectNonCodeRanges(getFileText(filePath), filePath);
+    nonCodeCache.set(filePath, ranges);
+    return ranges;
+  };
   for (const m of matches) {
-    const list = matchesByFile.get(m.filePath);
-    if (list)
-      list.push(m);
-    else
-      matchesByFile.set(m.filePath, [m]);
-  }
-  for (const [filePath, fileMatches] of matchesByFile) {
-    const sourceFile = program.getSourceFile(filePath);
-    if (!sourceFile)
+    const filePath = m.filePath;
+    const fileText = getFileText(filePath);
+    const nonCodeRanges = getNonCodeRanges(filePath);
+    const sub = m.submatches[submatch];
+    if (!sub) {
+      candidates.push({
+        filePath,
+        line: m.line,
+        preview: m.preview,
+        error: `No submatch ${submatch} (available: ${m.submatches.length})`
+      });
       continue;
-    const fileText = ctx.readFileText(filePath);
-    const nonCodeRanges = collectNonCodeRanges(fileText, filePath);
-    for (const m of fileMatches) {
-      const sub = m.submatches[submatch];
-      if (!sub) {
+    }
+    let targetByteOffsetInSub = 0;
+    if (target) {
+      const buf = Buffer.from(sub.text, "utf8");
+      const needle = Buffer.from(target, "utf8");
+      const first = buf.indexOf(needle);
+      const second = first === -1 ? -1 : buf.indexOf(needle, first + 1);
+      if (first === -1) {
         candidates.push({
           filePath,
           line: m.line,
           preview: m.preview,
-          error: `No submatch ${submatch} (available: ${m.submatches.length})`
+          error: `Target not found in match: ${target}`
         });
         continue;
       }
-      let targetByteOffsetInSub = 0;
-      if (target) {
-        const buf = Buffer.from(sub.text, "utf8");
-        const needle = Buffer.from(target, "utf8");
-        const first = buf.indexOf(needle);
-        const second = first === -1 ? -1 : buf.indexOf(needle, first + 1);
-        if (first === -1) {
-          candidates.push({
-            filePath,
-            line: m.line,
-            preview: m.preview,
-            error: `Target not found in match: ${target}`
-          });
-          continue;
-        }
-        if (second !== -1) {
-          candidates.push({
-            filePath,
-            line: m.line,
-            preview: m.preview,
-            error: `Target occurs multiple times in match; refine --regex or --target`
-          });
-          continue;
-        }
-        targetByteOffsetInSub = first;
-      }
-      const absByteOffset = m.matchByteOffset + sub.startByte + targetByteOffsetInSub;
-      const pos = byteOffsetToUtf16Pos(fileText, absByteOffset);
-      if (isPosInNonCode(pos, nonCodeRanges)) {
-        continue;
-      }
-      const lc = sourceFile.getLineAndCharacterOfPosition(pos);
-      const line1 = lc.line + 1;
-      const char1 = lc.character + 1;
-      const qi = ctx.languageService.getQuickInfoAtPosition(filePath, pos);
-      if (!qi) {
+      if (second !== -1) {
         candidates.push({
           filePath,
-          line: line1,
-          character: char1,
-          pos,
+          line: m.line,
           preview: m.preview,
-          error: "No QuickInfo at candidate position"
+          error: `Target occurs multiple times in match; refine --regex or --target`
         });
         continue;
       }
-      const hoverNode = getNodeForHover(sourceFile, pos);
-      const symbol = checker.getSymbolAtLocation(hoverNode) ?? undefined;
-      const type = symbol ? checker.getTypeOfSymbolAtLocation(symbol, hoverNode) : checker.getTypeAtLocation(hoverNode);
-      const expandedType = expand ? expandTypeBounded(checker, type, hoverNode, {
-        depth,
-        maxProps,
-        maxUnion,
-        maxChars
-      }) : undefined;
-      candidates.push(ctx.formatResult({
-        filePath,
-        sourceFile,
-        pos,
-        quickInfo: qi,
-        expandedType,
-        preview: m.preview,
-        line: line1
-      }));
+      targetByteOffsetInSub = first;
     }
+    const absByteOffset = m.matchByteOffset + sub.startByte + targetByteOffsetInSub;
+    const pos = byteOffsetToUtf16Pos(fileText, absByteOffset);
+    if (isPosInNonCode(pos, nonCodeRanges)) {
+      continue;
+    }
+    items.push({ filePath, pos, preview: m.preview, line: m.line });
+  }
+  const { engine, lspEndpoint } = resolveEngine(parsed.flags);
+  const batch = await engineBatchAt({
+    engine,
+    lspEndpoint,
+    cwd: params.cwd,
+    projectFlag,
+    items,
+    expand,
+    depth,
+    maxProps,
+    maxUnion,
+    maxChars
+  });
+  for (let i = 0;i < items.length; i++) {
+    const it = items[i];
+    const r = batch.results[i];
+    if (r.status === "ok") {
+      candidates.push(r.result);
+      continue;
+    }
+    const fileText = getFileText(it.filePath);
+    const lc = utf16PosToLineChar1Based(fileText, it.pos);
+    if (r.status === "noQuickInfo") {
+      candidates.push({
+        filePath: it.filePath,
+        line: it.line ?? lc.line,
+        character: lc.character,
+        pos: it.pos,
+        preview: it.preview,
+        error: "No QuickInfo at candidate position"
+      });
+      continue;
+    }
+    candidates.push({
+      filePath: it.filePath,
+      line: it.line ?? lc.line,
+      character: lc.character,
+      pos: it.pos,
+      preview: it.preview,
+      error: r.message
+    });
   }
   const out = {
     regex,
     root,
     candidates
   };
-  process3.stdout.write(json ? formatGrepJson(out) : formatGrepHuman(out));
+  process5.stdout.write(json ? formatGrepJson(out) : formatGrepHuman(out));
   const okCount = candidates.filter((c) => !c.error).length;
   if (okCount === 1)
     return 0;
   return okCount === 0 ? 2 : 3;
 }
 
+// src/lib/commands/server.ts
+import process7 from "node:process";
+
+// src/lib/daemon/server.ts
+import fs6 from "node:fs";
+import net2 from "node:net";
+import process6 from "node:process";
+
+// src/lib/ts/incremental.ts
+var import_typescript6 = __toESM(require_typescript(), 1);
+import fs5 from "node:fs";
+import path9 from "node:path";
+function createIncrementalTsContext(params) {
+  const projectPath = findUpTsconfig({ cwd: params.cwd, project: params.project, extraFile: params.extraFileNames?.[0] });
+  const configFile = import_typescript6.default.readConfigFile(projectPath, import_typescript6.default.sys.readFile);
+  if (configFile.error) {
+    throw new Error(import_typescript6.default.formatDiagnosticsWithColorAndContext([configFile.error], {
+      getCanonicalFileName: (f) => f,
+      getCurrentDirectory: () => params.cwd,
+      getNewLine: () => `
+`
+    }));
+  }
+  const configDir = path9.dirname(projectPath);
+  const parsed = import_typescript6.default.parseJsonConfigFileContent(configFile.config, import_typescript6.default.sys, configDir, undefined, projectPath);
+  if (parsed.errors.length) {
+    throw new Error(import_typescript6.default.formatDiagnosticsWithColorAndContext(parsed.errors, {
+      getCanonicalFileName: (f) => f,
+      getCurrentDirectory: () => params.cwd,
+      getNewLine: () => `
+`
+    }));
+  }
+  const extraFiles = new Set;
+  for (const f of params.extraFileNames ?? []) {
+    extraFiles.add(path9.resolve(params.cwd, f));
+  }
+  const records = new Map;
+  function statMtimeMs(abs) {
+    try {
+      return fs5.statSync(abs).mtimeMs;
+    } catch {
+      return -1;
+    }
+  }
+  function ensureRecord(abs) {
+    const r = records.get(abs);
+    if (r)
+      return r;
+    const rec = { version: 0, mtimeMs: -1, pendingReload: true };
+    records.set(abs, rec);
+    return rec;
+  }
+  function refreshMetadata(abs) {
+    const mtimeMs = statMtimeMs(abs);
+    const rec = ensureRecord(abs);
+    if (mtimeMs === -1)
+      return;
+    if (rec.mtimeMs !== mtimeMs) {
+      rec.mtimeMs = mtimeMs;
+      rec.version++;
+      rec.pendingReload = true;
+    }
+  }
+  const readFileText = (filePath) => {
+    const abs = path9.isAbsolute(filePath) ? filePath : path9.resolve(params.cwd, filePath);
+    refreshMetadata(abs);
+    const rec = ensureRecord(abs);
+    if (!rec.pendingReload && rec.text != null)
+      return rec.text;
+    const text = import_typescript6.default.sys.readFile(abs) ?? fs5.readFileSync(abs, "utf8");
+    rec.text = text;
+    rec.snapshot = import_typescript6.default.ScriptSnapshot.fromString(text);
+    rec.pendingReload = false;
+    return text;
+  };
+  const host = {
+    getCompilationSettings: () => parsed.options,
+    getScriptFileNames: () => {
+      const base = parsed.fileNames;
+      if (extraFiles.size === 0)
+        return base;
+      return [...base, ...Array.from(extraFiles)];
+    },
+    getScriptVersion: (fileName) => {
+      const abs = path9.isAbsolute(fileName) ? fileName : path9.resolve(params.cwd, fileName);
+      refreshMetadata(abs);
+      return String(ensureRecord(abs).version);
+    },
+    getScriptSnapshot: (fileName) => {
+      const abs = path9.isAbsolute(fileName) ? fileName : path9.resolve(params.cwd, fileName);
+      refreshMetadata(abs);
+      const rec = ensureRecord(abs);
+      if (!rec.pendingReload && rec.snapshot)
+        return rec.snapshot;
+      try {
+        const text = import_typescript6.default.sys.readFile(abs) ?? fs5.readFileSync(abs, "utf8");
+        rec.text = text;
+        rec.snapshot = import_typescript6.default.ScriptSnapshot.fromString(text);
+        rec.pendingReload = false;
+        return rec.snapshot;
+      } catch {
+        return;
+      }
+    },
+    getCurrentDirectory: () => params.cwd,
+    getDefaultLibFileName: (opts) => import_typescript6.default.getDefaultLibFilePath(opts),
+    fileExists: import_typescript6.default.sys.fileExists,
+    readFile: import_typescript6.default.sys.readFile,
+    readDirectory: import_typescript6.default.sys.readDirectory,
+    directoryExists: import_typescript6.default.sys.directoryExists,
+    getDirectories: import_typescript6.default.sys.getDirectories
+  };
+  const languageService = import_typescript6.default.createLanguageService(host, import_typescript6.default.createDocumentRegistry());
+  const formatResult = (input) => {
+    const { line, character } = posToLineChar1Based(input.sourceFile, input.pos);
+    const docs = import_typescript6.default.displayPartsToString(input.quickInfo.documentation ?? []) || undefined;
+    const tags = (input.quickInfo.tags ?? []).map((t) => ({
+      name: t.name,
+      text: import_typescript6.default.displayPartsToString(t.text ?? []) || undefined
+    }));
+    const deprecatedTag = tags.find((t) => t.name === "deprecated");
+    const deprecated = Boolean(deprecatedTag);
+    const deprecatedText = deprecatedTag?.text;
+    const display = quickInfoToDisplay(input.quickInfo);
+    const r = {
+      filePath: input.filePath,
+      line: input.line ?? line,
+      character,
+      pos: input.pos,
+      preview: input.preview,
+      kind: input.quickInfo.kind,
+      kindModifiers: input.quickInfo.kindModifiers,
+      display,
+      documentation: docs,
+      tags: tags.length ? tags : undefined,
+      deprecated,
+      deprecatedText,
+      expandedType: input.expandedType
+    };
+    return r;
+  };
+  for (const f of extraFiles) {
+    readFileText(f);
+  }
+  const addExtraFile = (filePath) => {
+    const abs = path9.isAbsolute(filePath) ? filePath : path9.resolve(params.cwd, filePath);
+    if (!extraFiles.has(abs)) {
+      extraFiles.add(abs);
+      refreshMetadata(abs);
+    }
+    readFileText(abs);
+  };
+  return {
+    languageService,
+    projectPath,
+    readFileText,
+    formatResult,
+    addExtraFile
+  };
+}
+
+// src/lib/daemon/server.ts
+async function runTypehintServer(params) {
+  const ctx = createIncrementalTsContext({
+    cwd: params.cwd,
+    project: params.projectFlag
+  });
+  try {
+    if (fs6.existsSync(params.socketPath))
+      fs6.unlinkSync(params.socketPath);
+  } catch {}
+  let idleTimer;
+  function resetIdleTimer() {
+    if (params.idleMs <= 0)
+      return;
+    if (idleTimer)
+      clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      try {
+        server2.close();
+      } catch {}
+      process6.exit(0);
+    }, params.idleMs);
+  }
+  const server2 = net2.createServer((sock) => {
+    resetIdleTimer();
+    sock.setEncoding("utf8");
+    const onData = createJsonLineParser(async (obj) => {
+      resetIdleTimer();
+      const req = obj;
+      if (!req || typeof req !== "object" || typeof req.id !== "string" || typeof req.method !== "string")
+        return;
+      try {
+        if (req.method === "typehint/ping") {
+          writeJsonLine(sock, { id: req.id, result: { ok: true } });
+          return;
+        }
+        if (req.method === "typehint/at") {
+          const p = req.params ?? {};
+          if (p.filePath)
+            ctx.addExtraFile(String(p.filePath));
+          const out = computeTypehintAt(ctx, normalizeAtParams(p));
+          writeJsonLine(sock, { id: req.id, result: out });
+          return;
+        }
+        if (req.method === "typehint/batchAt") {
+          const p = req.params ?? {};
+          const items = Array.isArray(p.items) ? p.items : [];
+          const opts = p.options ?? {};
+          for (const it of items) {
+            if (it?.filePath)
+              ctx.addExtraFile(String(it.filePath));
+          }
+          const results = items.map((it) => {
+            const merged = {
+              filePath: String(it.filePath ?? ""),
+              pos: Number(it.pos ?? 0),
+              preview: it.preview != null ? String(it.preview) : undefined,
+              line: it.line != null ? Number(it.line) : undefined,
+              expand: Boolean(opts.expand ?? true),
+              depth: Number(opts.depth ?? 2),
+              maxProps: Number(opts.maxProps ?? 50),
+              maxUnion: Number(opts.maxUnion ?? 10),
+              maxChars: Number(opts.maxChars ?? 4000)
+            };
+            return computeTypehintAt(ctx, merged);
+          });
+          writeJsonLine(sock, { id: req.id, result: { results } });
+          return;
+        }
+        writeJsonLine(sock, {
+          id: req.id,
+          error: { message: `Unknown method: ${req.method}` }
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const stack = err instanceof Error ? err.stack : undefined;
+        writeJsonLine(sock, { id: req.id, error: { message: msg, stack } });
+      }
+    });
+    sock.on("data", onData);
+  });
+  await new Promise((resolve, reject) => {
+    server2.once("error", reject);
+    server2.listen(params.socketPath, () => resolve());
+  });
+  resetIdleTimer();
+  await new Promise((resolve) => {
+    server2.once("close", () => resolve());
+  });
+}
+function normalizeAtParams(p) {
+  return {
+    filePath: String(p.filePath ?? ""),
+    pos: Number(p.pos ?? 0),
+    preview: p.preview != null ? String(p.preview) : undefined,
+    line: p.line != null ? Number(p.line) : undefined,
+    expand: Boolean(p.expand ?? true),
+    depth: Number(p.depth ?? 2),
+    maxProps: Number(p.maxProps ?? 50),
+    maxUnion: Number(p.maxUnion ?? 10),
+    maxChars: Number(p.maxChars ?? 4000)
+  };
+}
+
+// src/lib/commands/server.ts
+async function typehintServer(params) {
+  const parsed = parseArgs(params.argv);
+  const socketPath = getFlagString(parsed.flags, "socket");
+  if (!socketPath) {
+    process7.stderr.write(`Missing required flag: --socket
+`);
+    return 1;
+  }
+  const projectFlag = getFlagString(parsed.flags, "project") ?? getFlagString(parsed.flags, "p");
+  const idleMs = getFlagNumber(parsed.flags, "idleMs", {
+    defaultValue: Number(process7.env.TYPEHINT_DAEMON_IDLE_MS ?? "300000"),
+    min: 0
+  });
+  await runTypehintServer({
+    cwd: params.cwd,
+    projectFlag,
+    socketPath,
+    idleMs
+  });
+  return 0;
+}
+
 // src/lib/help.ts
-import path7 from "node:path";
-import process4 from "node:process";
+import path10 from "node:path";
+import process8 from "node:process";
 function printHelp() {
-  const bin = path7.basename(process4.argv[1] ?? "typehint");
-  process4.stdout.write([
+  const bin = path10.basename(process8.argv[1] ?? "typehint");
+  process8.stdout.write([
     "typehint - TypeScript type hints via TS language service",
     "",
     "Usage:",
     `  ${bin} at --file <path> (--pos <offset> | --line <n> --char <n>) [options]`,
     `  ${bin} grep --regex <pattern> [--target <text>] [options]`,
+    `  ${bin} server --socket <path> [--project <path>] [options]`,
     "",
     "Commands:",
     "  at    Get QuickInfo + expanded type at a position",
     "  grep  Search with ripgrep, then run 'at' on candidates",
+    "  server  Run persistent workspace service (daemon)",
     "",
     "Common options:",
     "  --project <path>      Path to tsconfig.json (or a directory containing it)",
+    "  --engine <auto|daemon|local|lsp>  Execution mode (default: auto)",
+    "  --lsp <endpoint>      Workspace endpoint to try first (unix:/path.sock or tcp:host:port)",
     "  --json                Emit machine-readable JSON",
     "",
     "Type expansion options:",
@@ -169709,6 +170446,10 @@ function printHelp() {
     "  --target <text>       Substring inside the match to compute a precise position",
     "  --submatch <n>        Which rg submatch to use (default: 0)",
     "  --includeNodeModules  Include node_modules in search (default: false)",
+    "",
+    "Server options:",
+    "  --socket <path>       Unix socket path to listen on",
+    "  --idleMs <n>          Auto-exit after idle milliseconds (default: 300000)",
     "",
     "Examples:",
     `  ${bin} at --file src/foo.ts --line 12 --char 8`,
@@ -169737,33 +170478,40 @@ async function main(argv) {
   if (cmd === "at") {
     const res = await typehintAt({
       argv: rest,
-      cwd: process5.cwd()
+      cwd: process9.cwd()
     });
     return res;
   }
   if (cmd === "grep") {
     const res = await typehintGrep({
       argv: rest,
-      cwd: process5.cwd()
+      cwd: process9.cwd()
+    });
+    return res;
+  }
+  if (cmd === "server") {
+    const res = await typehintServer({
+      argv: rest,
+      cwd: process9.cwd()
     });
     return res;
   }
   if (cmd === "--version" || cmd === "-v" || cmd === "version") {
-    process5.stdout.write(`typehint (${"0.0.1"})
+    process9.stdout.write(`typehint (${"0.0.1"})
 `);
     return 0;
   }
-  process5.stderr.write(`Unknown command: ${cmdRaw}
+  process9.stderr.write(`Unknown command: ${cmdRaw}
 
-Run: ${path8.basename(process5.argv[1] ?? "typehint")} --help
+Run: ${path11.basename(process9.argv[1] ?? "typehint")} --help
 `);
   return 1;
 }
-main(process5.argv.slice(2)).then((code) => {
-  process5.exitCode = code;
+main(process9.argv.slice(2)).then((code) => {
+  process9.exitCode = code;
 }).catch((err) => {
   const msg = err instanceof Error ? err.stack ?? err.message : String(err);
-  process5.stderr.write(`${msg}
+  process9.stderr.write(`${msg}
 `);
-  process5.exitCode = 1;
+  process9.exitCode = 1;
 });
