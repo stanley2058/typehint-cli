@@ -1,0 +1,27 @@
+{
+  "name": "@stanley2058/typehint-cli",
+  "module": "index.ts",
+  "type": "module",
+  "license": "MIT",
+  "version": "0.0.1",
+  "description": "TypeScript type hints via TypeScript language service (hover + bounded expansion)",
+  "bin": {
+    "typehint": "dist/index.js"
+  },
+  "scripts": {
+    "build": "bun build.ts && chmod +x dist/index.js",
+    "typehint": "bun run src/cli.ts",
+    "typehint:help": "bun run src/cli.ts --help",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "dependencies": {
+    "typescript": "^5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stanley2058/typehint-cli.git"
+  }
+}
