@@ -141,6 +141,10 @@ export function createIncrementalTsContext(params: {
     readDirectory: ts.sys.readDirectory,
     directoryExists: ts.sys.directoryExists,
     getDirectories: ts.sys.getDirectories,
+    // Keep TS's canonical file names consistent across symlink paths.
+    // This fixes type degradation to `any` in Bun-style node_modules/.bun setups.
+    realpath: ts.sys.realpath,
+    useCaseSensitiveFileNames: () => ts.sys.useCaseSensitiveFileNames,
   };
 
   const languageService = ts.createLanguageService(host, ts.createDocumentRegistry());

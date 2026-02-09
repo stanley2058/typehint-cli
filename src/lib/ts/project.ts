@@ -95,6 +95,12 @@ export async function createTsContext(params: {
     readDirectory: ts.sys.readDirectory,
     directoryExists: ts.sys.directoryExists,
     getDirectories: ts.sys.getDirectories,
+    // Critical for symlink-heavy installs (e.g. Bun's node_modules/.bun).
+    // Without realpath, TS may resolve a package from its symlink path, then
+    // fail to resolve that package's transitive deps that only exist relative
+    // to the real path.
+    realpath: ts.sys.realpath,
+    useCaseSensitiveFileNames: () => ts.sys.useCaseSensitiveFileNames,
   };
 
   const languageService = ts.createLanguageService(host, ts.createDocumentRegistry());

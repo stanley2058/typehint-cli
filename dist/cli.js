@@ -169061,7 +169061,9 @@ async function createTsContext(params) {
     readFile: import_typescript3.default.sys.readFile,
     readDirectory: import_typescript3.default.sys.readDirectory,
     directoryExists: import_typescript3.default.sys.directoryExists,
-    getDirectories: import_typescript3.default.sys.getDirectories
+    getDirectories: import_typescript3.default.sys.getDirectories,
+    realpath: import_typescript3.default.sys.realpath,
+    useCaseSensitiveFileNames: () => import_typescript3.default.sys.useCaseSensitiveFileNames
   };
   const languageService = import_typescript3.default.createLanguageService(host, import_typescript3.default.createDocumentRegistry());
   const formatResult = (input) => {
@@ -170225,7 +170227,9 @@ function createIncrementalTsContext(params) {
     readFile: import_typescript6.default.sys.readFile,
     readDirectory: import_typescript6.default.sys.readDirectory,
     directoryExists: import_typescript6.default.sys.directoryExists,
-    getDirectories: import_typescript6.default.sys.getDirectories
+    getDirectories: import_typescript6.default.sys.getDirectories,
+    realpath: import_typescript6.default.sys.realpath,
+    useCaseSensitiveFileNames: () => import_typescript6.default.sys.useCaseSensitiveFileNames
   };
   const languageService = import_typescript6.default.createLanguageService(host, import_typescript6.default.createDocumentRegistry());
   const formatResult = (input) => {
