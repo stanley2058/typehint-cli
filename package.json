@@ -1,27 +1,54 @@
 {
   "name": "@stanley2058/typehint-cli",
-  "module": "src/cli.ts",
-  "type": "module",
+  "version": "0.1.0",
+  "description": "Ask the TypeScript compiler for the real type at a location, with bounded structural expansion. Built for coding agents.",
+  "keywords": [
+    "typescript",
+    "types",
+    "cli",
+    "language-service",
+    "quickinfo",
+    "hover",
+    "ai-agents",
+    "claude-code",
+    "skill"
+  ],
+  "author": "Stanley Wang",
   "license": "MIT",
-  "version": "0.0.1",
-  "description": "TypeScript type hints via TypeScript language service (hover + bounded expansion)",
-  "bin": {
-    "typehint": "dist/index.js"
-  },
-  "scripts": {
-    "build": "bun build.ts && chmod +x dist/index.js",
-    "typehint": "bun run src/cli.ts",
-    "typehint:help": "bun run src/cli.ts --help",
-    "test": "bun test"
-  },
-  "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "dependencies": {
-    "typescript": "^5"
+  "homepage": "https://github.com/stanley2058/typehint-cli#readme",
+  "bugs": {
+    "url": "https://github.com/stanley2058/typehint-cli/issues"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/stanley2058/typehint-cli.git"
+  },
+  "type": "module",
+  "bin": {
+    "typehint": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "skills"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "bun build.ts",
+    "typehint": "bun run src/cli.ts",
+    "typehint:help": "bun run src/cli.ts --help",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "prepublishOnly": "bun run typecheck && bun run test && bun run build"
+  },
+  "dependencies": {
+    "typescript": "^5"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
   }
 }
