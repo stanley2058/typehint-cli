@@ -21,7 +21,7 @@ bun add -g @stanley2058/typehint-cli
 
 Requirements:
 
-- Node.js 20 or newer
+- Node.js 22 or newer
 - A TypeScript project with a `tsconfig.json`
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) on `PATH` for `typehint grep`
 
