@@ -57,7 +57,13 @@ export async function rgSearch(params: {
 
   let buf = "";
   const done = new Promise<number>((resolve, reject) => {
-    child.on("error", reject);
+    child.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "ENOENT") {
+        reject(new Error("ripgrep (rg) not found on PATH; install it to use `typehint grep`"));
+        return;
+      }
+      reject(err);
+    });
     child.on("close", (code) => resolve(code ?? 0));
   });
 

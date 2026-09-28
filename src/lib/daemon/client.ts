@@ -108,6 +108,9 @@ function spawnServer(params: {
   child.unref?.();
 }
 
+/** The daemon was reached and returned an error, as opposed to being unreachable. */
+export class DaemonRpcError extends Error {}
+
 let nextId = 1;
 
 export async function requestDaemonJson(params: {
@@ -199,7 +202,7 @@ async function rpcRoundTrip(sock: net.Socket, req: RpcRequest): Promise<any> {
       if (!res || typeof res !== "object" || res.id !== req.id) return;
       cleanup();
       if (res.error) {
-        const e = new Error(res.error.message, { cause: res.error });
+        const e = new DaemonRpcError(res.error.message, { cause: res.error });
         reject(e);
         return;
       }

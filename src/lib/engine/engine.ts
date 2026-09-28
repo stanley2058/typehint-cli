@@ -7,7 +7,7 @@ import {
   computeTypehintAt,
   type ComputeAtOutput,
 } from "../typehint/compute.ts";
-import { requestDaemonJson } from "../daemon/client.ts";
+import { DaemonRpcError, requestDaemonJson } from "../daemon/client.ts";
 
 export type EngineKind = "auto" | "daemon" | "local" | "lsp";
 
@@ -97,27 +97,31 @@ export async function engineAt(params: {
   }
 
   if (wantsDaemon) {
-    const res = await requestDaemonJson({
-      cwd: params.cwd,
-      projectFlag: params.projectFlag,
-      extraFile: params.filePath,
-      method: "typehint/at",
-      requestParams: {
-        filePath: params.filePath,
-        pos: params.pos,
-        preview: params.preview,
-        line: params.line,
-        expand: params.expand,
-        depth: params.depth,
-        maxProps: params.maxProps,
-        maxUnion: params.maxUnion,
-        maxChars: params.maxChars,
-      },
-    });
-    return res as ComputeAtOutput;
+    try {
+      const res = await requestDaemonJson({
+        cwd: params.cwd,
+        projectFlag: params.projectFlag,
+        extraFile: params.filePath,
+        method: "typehint/at",
+        requestParams: {
+          filePath: params.filePath,
+          pos: params.pos,
+          preview: params.preview,
+          line: params.line,
+          expand: params.expand,
+          depth: params.depth,
+          maxProps: params.maxProps,
+          maxUnion: params.maxUnion,
+          maxChars: params.maxChars,
+        },
+      });
+      return res as ComputeAtOutput;
+    } catch (err) {
+      // auto mode: sockets can be unavailable (sandboxes, read-only tmp), so degrade to local.
+      if (params.engine !== "auto" || err instanceof DaemonRpcError) throw err;
+    }
   }
 
-  // Fallback: if the engine selection was weird, do local.
   const ctx = await createTsContext({
     cwd: params.cwd,
     project: params.projectFlag,
@@ -206,23 +210,27 @@ export async function engineBatchAt(params: {
   }
 
   if (wantsDaemon) {
-    const res = await requestDaemonJson({
-      cwd: params.cwd,
-      projectFlag: params.projectFlag,
-      extraFile: params.items[0]?.filePath,
-      method: "typehint/batchAt",
-      requestParams: {
-        items: params.items,
-        options: {
-          expand: params.expand,
-          depth: params.depth,
-          maxProps: params.maxProps,
-          maxUnion: params.maxUnion,
-          maxChars: params.maxChars,
+    try {
+      const res = await requestDaemonJson({
+        cwd: params.cwd,
+        projectFlag: params.projectFlag,
+        extraFile: params.items[0]?.filePath,
+        method: "typehint/batchAt",
+        requestParams: {
+          items: params.items,
+          options: {
+            expand: params.expand,
+            depth: params.depth,
+            maxProps: params.maxProps,
+            maxUnion: params.maxUnion,
+            maxChars: params.maxChars,
+          },
         },
-      },
-    });
-    return res as { results: ComputeAtOutput[] };
+      });
+      return res as { results: ComputeAtOutput[] };
+    } catch (err) {
+      if (params.engine !== "auto" || err instanceof DaemonRpcError) throw err;
+    }
   }
 
   return await engineBatchAt({
