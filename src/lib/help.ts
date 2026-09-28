@@ -1,8 +1,7 @@
-import path from "node:path";
 import process from "node:process";
 
 export function printHelp() {
-  const bin = path.basename(process.argv[1] ?? "typehint");
+  const bin = "typehint";
   process.stdout.write(
     [
       "typehint - TypeScript type hints via TS language service",
@@ -11,11 +10,13 @@ export function printHelp() {
       `  ${bin} at --file <path> (--pos <offset> | --line <n> --char <n>) [options]`,
       `  ${bin} grep --regex <pattern> [--target <text>] [options]`,
       `  ${bin} server --socket <path> [--project <path>] [options]`,
+      `  ${bin} install-skill [--dest <skills-dir>]...`,
       "",
       "Commands:",
-      "  at    Get QuickInfo + expanded type at a position",
-      "  grep  Search with ripgrep, then run 'at' on candidates",
-      "  server  Run persistent workspace service (daemon)",
+      "  at             Get QuickInfo + expanded type at a position",
+      "  grep           Search with ripgrep, then run 'at' on candidates",
+      "  server         Run persistent workspace service (daemon)",
+      "  install-skill  Copy the agent skill into ~/.agents/skills (or --dest)",
       "",
       "Common options:",
       "  --project <path>      Path to tsconfig.json (or a directory containing it)",

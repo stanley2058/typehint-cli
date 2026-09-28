@@ -1,8 +1,8 @@
-import path from "node:path";
 import process from "node:process";
 
 import { typehintAt } from "./lib/commands/at.ts";
 import { typehintGrep } from "./lib/commands/grep.ts";
+import { typehintInstallSkill } from "./lib/commands/install-skill.ts";
 import { typehintServer } from "./lib/commands/server.ts";
 import { printHelp } from "./lib/help.ts";
 
@@ -55,6 +55,13 @@ async function main(argv: string[]) {
     return res;
   }
 
+  if (cmd === "install-skill") {
+    return await typehintInstallSkill({
+      argv: rest,
+      cwd: process.cwd(),
+    });
+  }
+
   if (cmd === "--version" || cmd === "-v" || cmd === "version") {
     // Best-effort: avoid dynamic reading of package.json in MVP.
     process.stdout.write(`typehint (${PACKAGE_VERSION})\n`);
@@ -62,7 +69,7 @@ async function main(argv: string[]) {
   }
 
   process.stderr.write(
-    `Unknown command: ${cmdRaw}\n\nRun: ${path.basename(process.argv[1] ?? "typehint")} --help\n`,
+    `Unknown command: ${cmdRaw}\n\nRun: typehint --help\n`,
   );
   return 1;
 }
