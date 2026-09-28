@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install ripgrep
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get update && sudo apt-get install -y ripgrep; else brew install ripgrep; fi
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+      - run: bun run build
+      - name: Smoke test the packed CLI under Node
+        run: |
+          npm pack
+          npm install -g ./stanley2058-typehint-cli-*.tgz
+          typehint --version
+          typehint at --file fixtures/sample.ts --line 19 --char 5 --engine local
+          typehint at --file fixtures/sample.ts --line 19 --char 5 --engine daemon
+          typehint install-skill --dest "$RUNNER_TEMP/skills"
+          test -f "$RUNNER_TEMP/skills/typehint/SKILL.md"
