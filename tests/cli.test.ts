@@ -7,7 +7,7 @@ async function runCli(
   args: string[],
   opts?: { cwd?: string; env?: Record<string, string | undefined> },
 ) {
-  const proc = Bun.spawn(["bun", "run", "src/cli.ts", ...args], {
+  const proc = Bun.spawn([process.execPath, "run", path.resolve("src/cli.ts"), ...args], {
     stdout: "pipe",
     stderr: "pipe",
     cwd: opts?.cwd ?? process.cwd(),
@@ -508,5 +508,56 @@ describe("type expansion controls", () => {
     const out = JSON.parse(res.stdout);
     expect(String(out.display)).toContain("buildWith");
     expect(String(out.expandedType ?? "").length).toBeLessThanOrEqual(800);
+  });
+});
+
+describe("engine selection", () => {
+  // A socket directory that doesn't exist makes the daemon unreachable.
+  const noSocketEnv = {
+    XDG_RUNTIME_DIR: path.join(os.tmpdir(), "typehint-missing-dir", "nested"),
+    TMPDIR: path.join(os.tmpdir(), "typehint-missing-dir", "nested"),
+  };
+  const atArgs = ["at", "--file", "fixtures/sample.ts", "--line", "19", "--char", "5", "--json"];
+
+  test("auto falls back to local when the daemon is unreachable", async () => {
+    if (process.platform === "win32") return;
+    const res = await runCli([...atArgs, "--engine", "auto"], { env: noSocketEnv });
+    expect(res.exitCode).toBe(0);
+    expect(JSON.parse(res.stdout).display).toBe("(property) bar: Bar");
+  });
+
+  test("daemon mode reports the failure instead of falling back", async () => {
+    if (process.platform === "win32") return;
+    const res = await runCli([...atArgs, "--engine", "daemon"], { env: noSocketEnv });
+    expect(res.exitCode).toBe(1);
+  });
+});
+
+describe("typehint grep without ripgrep", () => {
+  test("explains that rg is missing", async () => {
+    const emptyBin = fs.mkdtempSync(path.join(os.tmpdir(), "typehint-nobin-"));
+    try {
+      const res = await runCli(["grep", "--regex", "foo"], { env: { PATH: emptyBin } });
+      expect(res.exitCode).toBe(1);
+      expect(res.stderr).toContain("ripgrep (rg) not found on PATH");
+    } finally {
+      fs.rmSync(emptyBin, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("typehint install-skill", () => {
+  test("copies SKILL.md into every --dest", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "typehint-skill-"));
+    try {
+      const res = await runCli(["install-skill", "--dest", path.join(root, "a"), "--dest", path.join(root, "b")]);
+      expect(res.exitCode).toBe(0);
+      const expected = fs.readFileSync("skills/typehint/SKILL.md", "utf8");
+      for (const d of ["a", "b"]) {
+        expect(fs.readFileSync(path.join(root, d, "typehint", "SKILL.md"), "utf8")).toBe(expected);
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
