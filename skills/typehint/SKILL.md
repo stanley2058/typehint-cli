@@ -15,6 +15,7 @@ It is backed by the TypeScript language service (not LSP) and supports two main 
 
 ## Requirements
 
+- `typehint` on PATH (`npm install -g @stanley2058/typehint-cli`)
 - `rg` (ripgrep) available on PATH for `typehint grep`
 - A TypeScript project with a `tsconfig.json`
 
@@ -55,6 +56,7 @@ Notes:
 Exit codes:
 
 - `0` exactly one valid candidate; output is that candidate
+- `1` usage or runtime error (message on stderr)
 - `2` no matches (or all matches filtered / no QuickInfo)
 - `3` multiple valid candidates; output includes a candidate list
 
